@@ -1,0 +1,270 @@
+/**
+ * ChatbotACC: Chatbot HTTP en un solo archivo (JDK estándar)
+ * ---------------------------------------------------------
+ * - Levanta un servidor HTTP en http://localhost:8080
+ * - Sirve una interfaz web mínima en "/" para conversar.
+ * - Recibe mensajes por POST "/chat" (JSON: {"message":"..."}) y responde JSON.
+ * - Motor simple de intents por palabras clave (fácil de editar/ampliar).
+ *
+ * Cómo ejecutar (Java 11+):
+ *   javac ChatbotACC.java && java ChatbotACC
+ *
+ * Sugerencias:
+ * - Ajusta RESPUESTAS y PALABRAS CLAVE según tus servicios y ofertas.
+ * - Integra con WhatsApp/FB/Telegram a través de un gateway aparte si lo deseas.
+ */
+public class ChatbotACC {
+
+    public static void main(String[] args) throws Exception {
+        int port = 8080;
+        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+
+        // Rutas
+        server.createContext("/", new RootPageHandler());
+        server.createContext("/chat", new ChatHandler());
+        server.setExecutor(null);
+
+        System.out.println("Chatbot ACC.CONTADORES iniciado en http://localhost:" + port);
+        server.start();
+    }
+
+    // ====== Handlers ======
+    static class RootPageHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendPlain(exchange, 405, "Method Not Allowed");
+                return;
+            }
+            String html = buildHTML();
+            byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
+        }
+    }
+
+    static class ChatHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendPlain(exchange, 405, "Method Not Allowed");
+                return;
+            }
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8).trim();
+            String message = extractJsonField(body, "message");
+            if (message == null || message.isBlank()) {
+                sendJson(exchange, 400, "{\"reply\":\"Por favor, envía un mensaje válido.\"}");
+                return;
+            }
+
+            // Procesar mensaje
+            String reply = NLU.process(message);
+            String json = "{\"reply\":\"" + escapeJson(reply) + "\"}";
+            sendJson(exchange, 200, json);
+        }
+    }
+
+    // ====== Motor NLU simple por intents ======
+    static class NLU {
+        private static final List<Intent> INTENTS = new ArrayList<>();
+        private static final String NOMBRE_MARCA = "ACC.CONTADORES";
+        private static final String CONTACTO = "Tel/WhatsApp: 8338-0469 | Email: josancajimenez@gmail.com";
+        private static final String FIRMA = "MDe. José Andrés Campos Jiménez, Lic.";
+
+        static {
+            // Bienvenida / ayuda
+            INTENTS.add(new Intent(
+                    "saludo",
+                    List.of("hola","buenas","saludos","hey","start","ayuda","menu","comenzar"),
+                    () -> "¡Hola! Soy el asistente virtual de " + NOMBRE_MARCA + ". " +
+                            "Puedo orientarte sobre nuestros servicios contables, tributarios, costos, finanzas, RRHH y capacitación. " +
+                            "Escribe, por ejemplo: 'declaraciones de impuestos', 'TRIBU-CR', 'contabilidad mensual', 'capacitaciones' o 'contacto'.\n" +
+                            CONTACTO
+            ));
+
+            // Contabilidad
+            INTENTS.add(new Intent(
+                    "contabilidad",
+                    List.of("contabilidad","libros","estados financieros","cierre","conciliaciones","provisiones","NIIF","NIIF PYMES"),
+                    () -> "Ofrecemos contabilidad integral: registros, conciliaciones, auxiliares, estados financieros bajo NIIF/NIIF para PYMES, cierres y reportes para gerencia. " +
+                            "También diseñamos manuales contables y control interno. ¿Deseas una propuesta mensual?\n" + CONTACTO
+            ));
+
+            // Tributario / TRIBU-CR
+            INTENTS.add(new Intent(
+                    "tributario",
+                    List.of("impuestos","declaraciones","renta","IVA","D-101","D-104","D-151","TRIBU","TRIBU-CR","hacienda","ATV"),
+                    () -> "Asesoría y cumplimiento tributario: diagnóstico fiscal, declaraciones de IVA y Renta, deberes formales, atención de requerimientos y transición a TRIBU-CR (usuarios, perfiles, formularios, pagos parciales). " +
+                            "Preparamos calendario fiscal y recordatorios. ¿Qué obligación deseas gestionar primero?\n" + CONTACTO
+            ));
+
+            // Precios de Transferencia
+            INTENTS.add(new Intent(
+                    "precios_transferencia",
+                    List.of("precios de transferencia","vinculadas","parte relacionada","estudio PT","declaración PT"),
+                    () -> "Elaboramos estudios de Precios de Transferencia (análisis funcional, comparables, márgenes, documentación local) y acompañamiento ante la DGT. " +
+                            "Cuéntame el giro del negocio y jurisdicciones vinculadas para estimar alcance.\n" + CONTACTO
+            ));
+
+            // Costos y control de gestión
+            INTENTS.add(new Intent(
+                    "costos",
+                    List.of("costos","costeo","ABC","margen","punto de equilibrio","presupuesto","KPI","tablero"),
+                    () -> "Diseñamos sistemas de costos (ABC, estándar), análisis de rentabilidad por producto/cliente, puntos de equilibrio, presupuestos y tableros de control (KPI). " +
+                            "¿Deseas un diagnóstico express de costos?\n" + CONTACTO
+            ));
+
+            // RRHH y planillas
+            INTENTS.add(new Intent(
+                    "rrhh",
+                    List.of("planilla","ccss","INS","contrato","liquidación","salarios","vacaciones","aguinaldo","horas extra"),
+                    () -> "Soporte en RRHH y planillas: contratación, cálculos laborales (vacaciones, aguinaldo, horas extra), liquidaciones, reportes a CCSS/INS y políticas internas. " +
+                            "¿Para cuántos colaboradores necesitas la gestión?\n" + CONTACTO
+            ));
+
+            // Finanzas personales y PyME
+            INTENTS.add(new Intent(
+                    "finanzas_personales",
+                    List.of("finanzas personales","presupuesto familiar","deudas","ahorro","inversión","flujo de caja"),
+                    () -> "Mentoría en finanzas personales/pyme: orden de deudas, presupuesto, metas de ahorro e inversión responsable. " +
+                            "Puedo armarte un plan en 3 pasos (diagnóstico, acciones, seguimiento).\n" + CONTACTO
+            ));
+
+            // Capacitaciones y docencia
+            INTENTS.add(new Intent(
+                    "capacitaciones",
+                    List.of("capacitaciones","taller","curso","formación","webinar","IA","inteligencia artificial","NIIF curso"),
+                    () -> "Capacitaciones in-company y abiertas: NIIF/NIIF PYMES, TRIBU-CR, costos, análisis financiero y \"IA aplicada a contabilidad y finanzas\". " +
+                            "Modalidad Zoom o presencial. ¿Tema y fecha tentativa?\n" + CONTACTO
+            ));
+
+            // Contacto directo
+            INTENTS.add(new Intent(
+                    "contacto",
+                    List.of("contacto","teléfono","whatsapp","correo","cita","agendar","ubicación"),
+                    () -> "Puedes escribirnos al 8338-0469 (WhatsApp) o al correo josancajimenez@gmail.com. " +
+                            "Atiende: " + FIRMA + ". \nHorarios flexibles y atención a empresas y profesionales."
+            ));
+
+            // Cierre / despedida
+            INTENTS.add(new Intent(
+                    "despedida",
+                    List.of("gracias","listo","adiós","hasta luego","chao"),
+                    () -> "¡Gracias por tu interés en " + NOMBRE_MARCA + "! Si deseas una cotización, indícame el servicio y el volumen (p. ej., # de facturas/mes, # colaboradores)."
+            ));
+        }
+
+        public static String process(String userText) {
+            String text = Optional.ofNullable(userText).orElse("").toLowerCase(Locale.ROOT);
+            // Normalización básica
+            text = text.replace("á","a").replace("é","e").replace("í","i").replace("ó","o").replace("ú","u");
+
+            // Salida rápida si pide menu/ayuda
+            if (text.matches(".*(ayuda|menu|opciones).*")) {
+                return menu();
+            }
+
+            // Scoring por coincidencia de palabras clave
+            Intent best = null;
+            int bestScore = 0;
+            for (Intent in : INTENTS) {
+                int score = in.score(text);
+                if (score > bestScore) { bestScore = score; best = in; }
+            }
+
+            if (best != null && bestScore > 0) {
+                return best.answer.get();
+            }
+
+            // Fallback con sugerencias
+            return "No he entendido bien tu consulta. " +
+                   "Puedes preguntar por: contabilidad, impuestos/TRIBU-CR, precios de transferencia, costos, RRHH, finanzas personales, capacitaciones o contacto.\n" +
+                   menu();
+        }
+
+        private static String menu() {
+            return "Opciones rápidas: " +
+                   "[Contabilidad] [Impuestos / TRIBU-CR] [Precios de Transferencia] [Costos] [RRHH] [Finanzas Personales] [Capacitaciones] [Contacto].";
+        }
+
+        static class Intent {
+            final String name;
+            final List<String> keywords;
+            final java.util.function.Supplier<String> answer;
+
+            Intent(String name, List<String> keywords, java.util.function.Supplier<String> answer) {
+                this.name = name;
+                this.keywords = keywords.stream()
+                        .map(k -> k.toLowerCase(Locale.ROOT)
+                                .replace("á","a").replace("é","e").replace("í","i").replace("ó","o").replace("ú","u"))
+                        .collect(Collectors.toList());
+                this.answer = answer;
+            }
+
+            int score(String text) {
+                int s = 0;
+                for (String k : keywords) {
+                    if (text.contains(k)) s++;
+                }
+                return s;
+            }
+        }
+    }
+
+    // ====== Utilidades HTTP/JSON ======
+    private static void sendPlain(HttpExchange exchange, int status, String text) throws IOException {
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
+    }
+
+    private static void sendJson(HttpExchange exchange, int status, String json) throws IOException {
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/json; charset=utf-8");
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
+    }
+
+    private static String extractJsonField(String json, String field) {
+        // Extracción muy simple (para demo). Para producción usa una librería JSON.
+        // Busca "field":"valor" ignorando espacios.
+        String key = "\"" + field + "\"";
+        int i = json.indexOf(key);
+        if (i < 0) return null;
+        int colon = json.indexOf(':', i + key.length());
+        if (colon < 0) return null;
+        int firstQuote = json.indexOf('"', colon + 1);
+        if (firstQuote < 0) return null;
+        int secondQuote = json.indexOf('"', firstQuote + 1);
+        if (secondQuote < 0) return null;
+        return json.substring(firstQuote + 1, secondQuote);
+    }
+
+    private static String escapeJson(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r");
+    }
+
+    // ====== Página HTML simple ======
+    private static String buildHTML() {
+        String now = LocalDateTime.now().toString();
+        return "<!doctype html>\n" +
+                "<html lang=\"es\">\n<head>\n<meta charset=\"utf-8\">\n<title>Chatbot ACC.CONTADORES</title>\n" +
+                "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" +
+                "<style>\nbody{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#0f172a;color:#e5e7eb} \n" +
+                ".wrap{max-width:860px;margin:0 auto;padding:24px} \n" +
+                ".card{background:#111827;border:1px solid #1f2937;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.3);padding:20px} \n" +
+                ".title{font-size:20px;font-weight:700;margin-bottom:8px} \n" +
+                ".small{color:#9ca3af;font-size:12px} \n" +
+                ".chat{height:420px;overflow:auto;background:#0b1220;border-radius:12px;padding:12px;margin-top:12px} \n" +
+                ".msg{margin:10px 0;padding:10px 12px;border-radius:12px;max-width:80%} \n" +
+                ".user{background:#1d4ed8;margin-left:auto} \n" +
+                ".bot{background:#374151} \n" +
+                ".row{display:flex;gap:8px;margin-top:12px} \n" +
+                "input,button{border-radius:10px;border:1px solid #374151;background:#0b1220;color:#e5e7eb;padding:10px 12px} \n" +
+                "button{cursor:pointer} \n" +
+                "</style>\n</head>\n<body>\n<div class=\"wrap\">\n  <div class=\"card\">\n    <div class=\"title\">Asistente Virtual — ACC.CONTADORES</div>\n    <div class=\"small\">Inicio: " + now + " · Servicios: Contabilidad · Tributario/TRIBU-CR · Costos · RRHH · Finanzas · Capacitaciones</div>\n    <div id=\"chat\" class=\"chat\"></div>\n    <div class=\"row\">\n      <input id=\"inp\" placeholder=\"Escribe tu consulta...\" style=\"flex:1\"/>\n      <button id=\"btn\">Enviar</button>\n    </div>\n  </div>\n</div>\n<script>\nconst chat = document.getElementById('chat');\nconst inp = document.getElementById('inp');\nconst btn = document.getElementById('btn');\nfunction addMsg(text, who){\n  const div = document.createElement('div');\n  div.className = 'msg ' + (who==='user'?'user':'bot');\n  div.textContent = text;\n  chat.appendChild(div);\n  chat.scrollTop = chat.scrollHeight;\n}\naddMsg('¡Hola! Soy el asistente de ACC.CONTADORES. ¿En qué puedo ayudarte? Escribe, por ejemplo: \"contabilidad mensual\", \"declaraciones TRIBU-CR\", \"capacitaciones\" o \"contacto\".','bot');\n\nasync function send(){\n  const text = inp.value.trim();\n  if(!text) return;\n  addMsg(text,'user');\n  inp.value='';\n  try{\n    const res = await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text})});\n    const data = await res.json();\n    addMsg(data.reply,'bot');\n  }catch(e){\n    addMsg('Error al conectar con el chatbot.','bot');\n  }\n}\nbtn.onclick = send;\ninp.addEventListener('keydown', e=>{ if(e.key==='Enter') send(); });\n</script>\n</body></n></html>";
+    }
+}
